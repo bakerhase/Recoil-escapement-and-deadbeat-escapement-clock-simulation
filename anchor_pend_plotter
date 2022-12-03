@@ -1,0 +1,228 @@
+import numpy as np
+import scipy.integrate as s
+import matplotlib.pyplot as plt
+from scipy import stats
+
+#Welcome to my very utilitarian, probably poorly written, but working (!!) recoil clock simulation
+
+#Note that throughout the program, 'x' is used in place of 'theta.' This was just to make typing easier on myself
+
+#Define various parameters to try out. The defaults here get a pretty good clock, but I'm sure a better one can be made!
+paramlist = [9.81, 1, 0.99277, 0.0059, 0.067, 0.001, 0.08, 0.5, np.pi*(0.03)**2 ]
+xmax = 0.105
+initic = [0,-xmax,0]
+xcrit = 0.01
+g = paramlist[0]
+L=paramlist[1]
+m = paramlist[2]
+tau_a = paramlist[3]
+mu_k = paramlist[4]
+r = paramlist[5]
+mu_ka = paramlist[6]
+c_d = paramlist[7]
+A = paramlist[8]
+
+# Here we define the equations of motion as discussed in the paper. The names are slightly misnomers, since free_up and free_back are
+# actually damped
+def forced_up(t,y):
+    x = y[0]
+    xdot = y[1]
+    return [xdot, -(g/L)*np.sin(x)-(mu_k*g/(L**2))*r*(np.cos(x))+(tau_a/(m*L**2))-mu_ka*tau_a/(m*L**2)-(1/(2*m))*c_d*A*1.275*(xdot)**2 ]
+
+def free_up(t,y):
+    x = y[0]
+    xdot = y[1]
+    return [xdot, -(g/L)*np.sin(x)-(mu_k*g/(L**2))*r*(np.cos(x))-tau_a/(m*L**2)-mu_ka*tau_a/(m*L**2)-(1/(2*m))*c_d*A*1.275*(xdot)**2 ]
+
+def forced_back(t,y):
+    x = y[0]
+    xdot = y[1]
+    return [xdot, -(g/L)*np.sin(x)+(mu_k*g/(L**2))*r*(np.cos(x))-(tau_a/(m*L**2))+mu_ka*tau_a/(m*L**2)+(1/(2*m))*c_d*A*1.275*(xdot)**2 ]
+
+def free_back(t,y):
+    x = y[0]
+    xdot = y[1]
+    return [xdot, -(g/L)*np.sin(x)+(mu_k*g/(L**2))*r*(np.cos(x))+tau_a/(m*L**2)+mu_ka*tau_a/(m*L**2)+(1/(2*m))*c_d*A*1.275*(xdot)**2 ]
+
+# This function actually solves the initial value problem for a given function and initial conditions
+def solver(iclist,tf,fct):
+    t0 = iclist[0]
+    x0 = iclist[1]
+    xdot0 = iclist[2]
+
+    t = np.linspace(t0,tf,200000)
+
+    solution = s.solve_ivp(fun = fct, t_span = [t[0],t[-1]], y0 = [x0,xdot0], t_eval = t)
+    return solution
+
+# This function plots each solution on the same axes. I primarily used it as a check that my solutions were reasonable.
+def plotting(sol, name):
+    plt.subplot(1,2,1)
+    plt.plot(sol.t,sol.y[1])
+
+    plt.subplot(1,2,2)
+    plt.plot(sol.t,sol.y[0])
+
+    plt.tight_layout
+
+    plt.savefig(name)
+
+# Finds the index at which a certain theta value is attained
+def tidx_from_x(sol, targx):
+    idx = 0
+    delta = 1000
+    for elt in sol.y[0]:
+        if (elt-targx)**2 <= delta**2:
+            delta = elt-targx
+            savedidx = idx
+        idx+=1
+    #print(delta)
+    #print(savedidx)
+    return savedidx
+
+# Finds the index at which a certain thetadot value is attained
+def tidx_from_xdot(sol, targxdot):
+    idx = 0
+    delta = 1000
+    for elt in sol.y[1]:
+        if (elt-targxdot)**2 <= delta**2:
+            delta = elt-targxdot
+            savedidx = idx
+        idx+=1
+    #print(delta)
+    #print(savedidx)
+    return savedidx
+
+# Takes a given index and returns the time, theta, and thetadot values at that index. Used for finding ICs
+def icfinder(sol, tidx):
+    iclist = [sol.t[tidx],sol.y[0][tidx],sol.y[1][tidx]]
+    return iclist
+
+# Solves for the initial conditions to use for the next initial value problem
+def nextic(iclist, tf, fct, name, tgtval, str):
+    sol0 = solver(iclist, tf, fct)
+    #plotting(sol0,name)
+    if str == 'xdot':
+        idx0 = tidx_from_xdot(sol0,tgtval)
+    elif str =='x':
+        idx0 = tidx_from_x(sol0, tgtval)
+    else:
+        print('Error')
+    ic0 = icfinder(sol0,idx0)
+    return ic0
+
+# This is the main function that someone playing around with this program would want to use. It finds the period and error per day
+# for a clock with the given parameters at the top of the program.
+def periodfind(xcrit,initic, g, L, m, tau_a, mu_k, r, mu_ka, c_d, A):
+    ic1 = nextic(initic, 1, forced_up, 'part1.png', xcrit, 'x')
+    ic2 = nextic(ic1, 1.1, free_up, 'part2.png',0,'xdot')
+    ic3 = nextic(ic2,2.1,forced_back,'part3.png',-xcrit,'x')
+    ic4 = nextic(ic3, 2.1, free_back, 'part4.png',0,'xdot')
+
+    print(ic4)
+    print('The period of the pendulum is '+str(ic4[0])+' seconds')
+    periods = 86400/ic4[0]
+
+    errperperiod = (ic4[0]-2)
+    errortot = errperperiod*periods
+    print('The error in a day is roughly '+str(errortot)+' seconds')
+
+# The function used for generating the error vs amplitude plot in the paper
+def plotamp(xcrit, g, L, m, tau_a, mu_k, r, mu_ka, c_d, A):
+    errarray=[]
+    xmaxlis = [-0.12,-0.115,-0.11,-0.105,-0.1]
+    inilis = [[0,-0.12,0],[0,-0.115,0],[0,-0.11,0],[0,-0.105,0],[0,-0.1,0]]
+    for initic in inilis:
+        ic1 = nextic(initic, 1, forced_up, 'part1.png', xcrit, 'x')
+        ic2 = nextic(ic1, 1.1, free_up, 'part2.png',0,'xdot')
+        ic3 = nextic(ic2,2.1,forced_back,'part3.png',-xcrit,'x')
+        ic4 = nextic(ic3, 2.1, free_back, 'part4.png',0,'xdot')
+
+        print(ic4)
+        print('The period of the pendulum is '+str(ic4[0])+' seconds')
+        periods = 86400/ic4[0]
+
+        errperperiod = (ic4[0]-2)
+        errortot = errperperiod*periods
+        print('The error in a day is roughly '+str(errortot)+' seconds')
+
+        errarray.append(errortot)
+
+    plt.figure()
+    x =np.array(xmaxlis)
+    plt.plot(x, errarray, "-o", label = "Data")
+    res = stats.linregress(x, errarray)
+    plt.plot(x, res.intercept + res.slope*x,'r', label = "Linear Regression")
+    plt.xlabel(r'$\theta_{max}$ (radians)')
+    plt.ylabel('Error per Day (sec/day)')
+    plt.legend()
+    plt.title(r'Recoil Error versus $\theta_{max}$')
+    plt.savefig('anchor_amplitude.png')
+
+# With better foresight, this block comment could have been a function. However, I didn't feel like rewriting all of my code in order
+# to do this. Removing the """ at the top and bottom of this block generates the error vs length plot in the paper.
+"""
+errarray=[]
+Llis = np.linspace(0.999755, 1.000245, 9, endpoint=True)
+for L in Llis:
+    ic1 = nextic(initic, 1, forced_up, 'part1.png', xcrit, 'x')
+    ic2 = nextic(ic1, 1.1, free_up, 'part2.png',0,'xdot')
+    ic3 = nextic(ic2,2.1,forced_back,'part3.png',-xcrit,'x')
+    ic4 = nextic(ic3, 2.1, free_back, 'part4.png',0,'xdot')
+    print(ic4)
+    print('The period of the pendulum is '+str(ic4[0])+' seconds')
+    periods = 86400/ic4[0]
+
+    errperperiod = (ic4[0]-2)
+    errortot = errperperiod*periods
+    print('The error in a day is roughly '+str(errortot)+' seconds')
+
+    errarray.append(errortot)
+
+plt.figure()
+plt.plot(Llis, errarray, "-o", label = 'Data')
+res = stats.linregress(Llis, errarray,)
+plt.plot(Llis, res.intercept + res.slope*Llis,'r', label = 'Linear Regression')
+plt.xlabel('Arm Length (m)')
+plt.ylabel('Error per Day (sec/day)')
+plt.title('Recoil Error versus Arm Length')
+plt.legend()
+plt.savefig('anchor_length.png')
+"""
+
+# With better foresight, this block comment could have been a function. However, I didn't feel like rewriting all of my code in order
+# to do this. Removing the """ at the top and bottom of this block generates the error vs torque plot in the paper.
+"""
+errarray=[]
+taulis = np.arange(0.,0.0121, 0.0001)
+for tau_a in taulis:
+    ic1 = nextic(initic, 1, forced_up, 'part1.png', xcrit, 'x')
+    ic2 = nextic(ic1, 1.1, free_up, 'part2.png',0,'xdot')
+    ic3 = nextic(ic2,2.1,forced_back,'part3.png',-xcrit,'x')
+    ic4 = nextic(ic3, 2.1, free_back, 'part4.png',0,'xdot')
+
+    print(ic4)
+    print('The period of the pendulum is '+str(ic4[0])+' seconds')
+    periods = 86400/ic4[0]
+
+    errperperiod = (ic4[0]-2)
+    errortot = errperperiod*periods
+    print('The error in a day is roughly '+str(errortot)+' seconds')
+
+    errarray.append(errortot)
+
+plt.figure()
+plt.plot(taulis, errarray, "-o", label = 'Data')
+res = stats.linregress(taulis, errarray)
+plt.plot(taulis, res.intercept + res.slope*taulis,'r', label = 'Linear Regression')
+plt.xlabel('Driving Torque (Nm)')
+plt.ylabel('Error per Day (sec/day)')
+plt.title('Recoil Error versus Driving Torque')
+plt.legend()
+plt.savefig('anchor_torque.png')
+"""
+
+#plotamp(xcrit, g, L, m, tau_a, mu_k, r, mu_ka, c_d, A)
+periodfind(xcrit,initic, g, L, m, tau_a, mu_k, r, mu_ka, c_d, A)
+
+print('Thank you for actually running this code!')
